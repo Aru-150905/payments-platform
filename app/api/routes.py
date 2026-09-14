@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+import uuid
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.base import get_session
+from app.db.models import Account, AccountType, Balance, Payment
+from app.domain.state_machine import IllegalTransition
+from app.services import ledger, payments
+
+router = APIRouter()
+
+
+# --------------------------------------------------------------------------
+# schemas
+# --------------------------------------------------------------------------
+
+class AccountIn(BaseModel):
+    owner_id: str
+    name: str
+    account_type: AccountType = AccountType.LIABILITY
+    currency: str = "INR"
+    allow_negative: bool = False
+
+
+class AccountOut(BaseModel):
+    id: uuid.UUID
+    owner_id: str
+    name: str
+    currency: str
+    balance_minor: int
+
+
+class PaymentIn(BaseModel):
+    payer_account_id: uuid.UUID
+    payee_account_id: uuid.UUID
+    # Minor units, so the API can never be handed 19.99 and round it.
+    amount_minor: int = Field(gt=0)
+    currency: str = "INR"
+
+
+class PaymentOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    amount_minor: int
+    currency: str
+
+    @classmethod
+    def of(cls, p: Payment) -> PaymentOut:
+        return cls(
+            id=p.id, status=p.status.value,
+            amount_minor=p.amount_minor, currency=p.currency,
+        )
+
+
+# --------------------------------------------------------------------------
+# accounts
+# --------------------------------------------------------------------------
+
+@router.post("/accounts", response_model=AccountOut, status_code=201)
+async def create_account(body: AccountIn, session: AsyncSession = Depends(get_session)):
+    async with session.begin():
+        account = Account(**body.model_dump())
+        session.add(account)
+        await session.flush()
+        # Every account gets its balance row up front, so ledger.post() can
+        # assume it exists and lock it. Creating it lazily would mean two
+        # concurrent first-postings racing to insert the same row.
+        session.add(
+            Balance(
+                account_id=account.id,
+                currency=account.currency,
+                balance_minor=0,
+            )
+        )
+
+    return AccountOut(
+        id=account.id, owner_id=account.owner_id, name=account.name,
+        currency=account.currency, balance_minor=0,
+    )
+
+
+@router.get("/accounts/{account_id}/balance")
+async def get_balance(account_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        balance = await ledger.get_balance(session, account_id)
+        return {"account_id": account_id, "balance_minor": balance}
+    except ledger.LedgerError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+# --------------------------------------------------------------------------
+# payments
+# --------------------------------------------------------------------------
+
+@router.post("/payments", response_model=PaymentOut, status_code=201)
+async def create_payment(
+    body: PaymentIn,
+    session: AsyncSession = Depends(get_session),
+    # Required, not optional. Making idempotency opt-in means every client that
+    # forgets the header can double-charge someone on a flaky connection.
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    try:
+        async with session.begin():
+            payment = await payments.create_and_authorize(
+                session,
+                idempotency_key=idempotency_key,
+                payer_account_id=body.payer_account_id,
+                payee_account_id=body.payee_account_id,
+                amount_minor=body.amount_minor,
+                currency=body.currency,
+            )
+    except ledger.InsufficientFunds as exc:
+        # 422, not 500. The request was well-formed; the world said no.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except (ledger.LedgerError, payments.PaymentError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    return PaymentOut.of(payment)
+
+
+@router.post("/payments/{payment_id}/capture", response_model=PaymentOut)
+async def capture_payment(payment_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    return await _mutate(session, payments.capture, payment_id)
+
+
+@router.post("/payments/{payment_id}/void", response_model=PaymentOut)
+async def void_payment(payment_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    return await _mutate(session, payments.void, payment_id)
+
+
+@router.get("/payments/{payment_id}", response_model=PaymentOut)
+async def get_payment(payment_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    payment = await session.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "payment not found")
+    return PaymentOut.of(payment)
+
+
+async def _mutate(session: AsyncSession, fn, payment_id: uuid.UUID) -> PaymentOut:
+    try:
+        async with session.begin():
+            payment = await fn(session, payment_id)
+    except IllegalTransition as exc:
+        # 409 Conflict is the right code: the request is valid, but the
+        # resource is not in a state where it can be honoured.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ledger.InsufficientFunds as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except (ledger.LedgerError, payments.PaymentError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return PaymentOut.of(payment)

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets — .env.example is committed, .env never is
+.env
+.env.*
+!.env.example
+
+# Local data
+*.sqlite3
+pgdata/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
