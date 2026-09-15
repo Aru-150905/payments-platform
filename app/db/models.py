@@ -228,6 +228,38 @@ class Payment(Base):
 
 
 # --------------------------------------------------------------------------
+# Read model
+# --------------------------------------------------------------------------
+
+class ReadModelPayment(Base):
+    """
+    Projected purely from payments.payment.v1 by app/events/consumer.py — see
+    ADR 0006. No other code path writes this table. Every column here is a
+    direct copy of the event payload as of the last event applied; there is
+    no running total or counter, which is what makes replaying the same
+    event twice (a redelivery, or a full rebuild) safe rather than additive.
+    """
+    __tablename__ = "read_model_payments"
+
+    payment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16))
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3))
+    payer_account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    payee_account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+
+    # The event, not the row, that produced this state. Useful for debugging
+    # a stuck or out-of-order projection; not consulted by the projection
+    # logic itself, which trusts Kafka's per-partition ordering instead.
+    last_event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    last_event_type: Mapped[str] = mapped_column(String(64))
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# --------------------------------------------------------------------------
 # Outbox and consumer dedup
 # --------------------------------------------------------------------------
 
