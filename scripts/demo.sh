@@ -17,14 +17,14 @@ payee=$(curl -sX POST $API/accounts -H 'content-type: application/json' \
 echo "payer=$payer payee=$payee"
 
 pay=$(curl -sX POST $API/payments \
-  -H 'content-type: application/json' -H 'Idempotency-Key: $KEY' \
+  -H 'content-type: application/json' -H "Idempotency-Key: $KEY" \
   -d "{\"payer_account_id\":\"$payer\",\"payee_account_id\":\"$payee\",\"amount_minor\":250000}")
 echo "authorized: $pay"
 id=$(echo "$pay" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
 echo "--- retry with the SAME idempotency key (must not create a second payment) ---"
 curl -sX POST $API/payments \
-  -H 'content-type: application/json' -H 'Idempotency-Key: $KEY' \
+  -H 'content-type: application/json' -H "Idempotency-Key: $KEY" \
   -d "{\"payer_account_id\":\"$payer\",\"payee_account_id\":\"$payee\",\"amount_minor\":250000}"; echo
 
 echo "--- capture ---"
