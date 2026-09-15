@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_session
@@ -149,6 +150,13 @@ async def _mutate(session: AsyncSession, fn, payment_id: uuid.UUID) -> PaymentOu
         # 409 Conflict is the right code: the request is valid, but the
         # resource is not in a state where it can be honoured.
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except IntegrityError as exc:
+        # Backstop, not the primary defence: assert_can_transition in
+        # payments.py should catch a repeated capture/void before this ever
+        # fires. Kept in case a future caller reaches ledger.post() without
+        # going through that check first — same failure (a stale unique
+        # constraint on the ledger transaction), same 409, no 500.
+        raise HTTPException(status.HTTP_409_CONFLICT, "operation already applied") from exc
     except ledger.InsufficientFunds as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except (ledger.LedgerError, payments.PaymentError) as exc:

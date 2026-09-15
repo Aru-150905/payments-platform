@@ -159,6 +159,14 @@ async def create_and_authorize(
 
 async def capture(session: AsyncSession, payment_id: uuid.UUID) -> Payment:
     payment = await _locked(session, payment_id)
+
+    # Check the state machine before touching the ledger. This is a cheap
+    # in-memory check and must run before any database write: a repeated
+    # capture would otherwise reach ledger.post() first and fail on
+    # uq_ledger_tx_idempotency with a raw IntegrityError, which surfaces to
+    # the client as a 500 instead of the 409 an illegal transition should be.
+    assert_can_transition(payment.status, PaymentStatus.CAPTURED)
+
     clearing = await _clearing_account(session, payment.currency)
 
     await ledger.post(
@@ -178,6 +186,12 @@ async def capture(session: AsyncSession, payment_id: uuid.UUID) -> Payment:
 
 async def void(session: AsyncSession, payment_id: uuid.UUID) -> Payment:
     payment = await _locked(session, payment_id)
+
+    # Same reasoning as capture(): the state machine must be checked before
+    # any ledger write, or a repeated void hits uq_ledger_tx_idempotency and
+    # surfaces as a 500 instead of a 409.
+    assert_can_transition(payment.status, PaymentStatus.VOIDED)
+
     clearing = await _clearing_account(session, payment.currency)
 
     await ledger.post(
