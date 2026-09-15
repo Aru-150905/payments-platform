@@ -1,4 +1,5 @@
-.PHONY: up ui down topics migrate seed api worker relay logs demo
+.PHONY: up ui down topics migrate seed api worker relay logs demo \
+	rebuild-read-model reconcile retention-purge
 
 up:
 	docker compose up -d
@@ -9,11 +10,17 @@ ui:
 down:
 	docker compose down -v
 
+# retention.ms is set explicitly (7 days) rather than left at the broker's
+# default so it's a documented number, not an implicit one — see
+# app/services/retention.py, which justifies processed_events' own retention
+# window against this exact figure.
 topics:
 	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
-		--create --if-not-exists --topic payments.payment.v1 --partitions 3 --replication-factor 1
+		--create --if-not-exists --topic payments.payment.v1 --partitions 3 --replication-factor 1 \
+		--config retention.ms=604800000
 	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
-		--create --if-not-exists --topic payments.dlq.v1 --partitions 1 --replication-factor 1
+		--create --if-not-exists --topic payments.dlq.v1 --partitions 1 --replication-factor 1 \
+		--config retention.ms=604800000
 	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
 migrate:
@@ -36,3 +43,14 @@ logs:
 
 demo:
 	bash scripts/demo.sh
+
+# Do not run this while `make worker` is also running against the same
+# topic — see ADR 0006's consequences.
+rebuild-read-model:
+	python -m scripts.rebuild_read_model
+
+reconcile:
+	python -m scripts.reconcile
+
+retention-purge:
+	python -m scripts.retention
