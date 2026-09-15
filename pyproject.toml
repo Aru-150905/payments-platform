@@ -22,3 +22,5 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Body",
 ]
+
+asyncio_default_fixture_loop_scope = "function"
