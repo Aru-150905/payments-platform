@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,6 +116,20 @@ async def create_payment(
                 amount_minor=body.amount_minor,
                 currency=body.currency,
             )
+    except IntegrityError:
+        # Lost a race against a concurrent request carrying the same
+        # Idempotency-Key — both passed create_and_authorize()'s initial
+        # "does this key exist yet?" check before either had committed, so
+        # both tried to insert. `async with session.begin()` above has
+        # already rolled the failed attempt back cleanly; read back the
+        # request that won and return ITS payment, so the loser's client
+        # sees the same idempotent result the winner's does.
+        existing = (
+            await session.execute(
+                select(Payment).where(Payment.idempotency_key == idempotency_key)
+            )
+        ).scalar_one()
+        return PaymentOut.of(existing)
     except ledger.InsufficientFunds as exc:
         # 422, not 500. The request was well-formed; the world said no.
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc

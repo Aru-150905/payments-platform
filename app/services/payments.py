@@ -19,7 +19,6 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Account, OutboxEvent, Payment, PaymentStatus
@@ -128,17 +127,18 @@ async def create_and_authorize(
     )
     session.add(payment)
 
-    try:
-        await session.flush()
-    except IntegrityError:
-        # Lost the race against a concurrent identical request. The other one
-        # won; read its result and return that.
-        await session.rollback()
-        return (
-            await session.execute(
-                select(Payment).where(Payment.idempotency_key == idempotency_key)
-            )
-        ).scalar_one()
+    # No try/except here. This runs inside the caller's `async with
+    # session.begin():` (see routes.py) — an ORM flush failure deactivates
+    # the Session's transaction tracking outright, savepoint or not, so
+    # catching IntegrityError and continuing on the SAME session (whether via
+    # a bare rollback() or a begin_nested() SAVEPOINT) leaves it in a state
+    # where the next query raises "Can't operate on closed transaction",
+    # trading one bug for another. Only two concurrent requests on the same
+    # idempotency key can ever reach this flush(); letting it propagate lets
+    # the enclosing `session.begin()` do a full, clean rollback, the same way
+    # every other error from this function already does (InsufficientFunds,
+    # LedgerError). The caller reads back the winning payment afterward.
+    await session.flush()
 
     clearing = await _clearing_account(session, currency)
 
