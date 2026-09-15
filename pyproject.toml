@@ -1,6 +1,7 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
@@ -22,5 +23,3 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Body",
 ]
-
-asyncio_default_fixture_loop_scope = "function"
