@@ -2,6 +2,15 @@
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_default_fixture_loop_scope = "function"
+asyncio_mode = "auto"
+# Plain `pytest -q` (the fast CI job) must stay infra-free, so integration
+# tests are opted OUT by default here rather than relying on every invoker to
+# remember `-m "not integration"`. Run them explicitly with `pytest -m
+# integration` (needs `docker compose up -d postgres`, migrated and seeded).
+addopts = '-m "not integration"'
+markers = [
+    "integration: needs the compose stack (Postgres) up, migrated, and seeded",
+]
 
 [tool.ruff]
 line-length = 100
