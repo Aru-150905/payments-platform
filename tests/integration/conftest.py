@@ -23,6 +23,10 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
 from app.db.base import engine
+from app.events.consumer import _new_consumer
+from app.events.consumer import drain_once as _project_once
+from app.events.producer import start_producer, stop_producer
+from app.events.relay import drain_once as _relay_once
 from app.main import app
 
 pytestmark = pytest.mark.integration
@@ -84,6 +88,53 @@ async def _fresh_pool_per_test() -> AsyncIterator[None]:
     """
     yield
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+async def _fresh_producer_per_test() -> AsyncIterator[None]:
+    """
+    app.events.producer holds its AIOKafkaProducer in a module-level global,
+    same shape as app.db.base's engine and the same hazard: it binds to the
+    event loop it started on, and pytest-asyncio hands every test a fresh
+    one. start_producer() is a no-op if a producer already exists, so
+    without this, test 2 would silently reuse test 1's producer — bound to
+    test 1's already-closed loop — instead of starting its own. Stopping it
+    resets the module global to None, so the next test that calls
+    start_producer() gets a fresh one under whatever loop is current then.
+    """
+    yield
+    await stop_producer()
+
+
+async def drain_pipeline() -> int:
+    """
+    Drains the outbox relay AND the read-model consumer to quiescence: every
+    unpublished outbox row gets published, then every unprojected Kafka
+    message gets applied to read_model_payments. Returns how many events the
+    consumer side projected.
+
+    Used instead of running the relay/worker as background processes during
+    tests, so a test controls exactly when its events move rather than
+    racing a long-running loop with an unpredictable poll interval — the
+    same reason relay.py and consumer.py each expose a single-shot
+    drain_once() rather than only the infinite run().
+    """
+    await start_producer()
+    while await _relay_once():
+        pass
+
+    consumer = _new_consumer()
+    await consumer.start()
+    try:
+        total = 0
+        while True:
+            n = await _project_once(consumer)
+            total += n
+            if n == 0:
+                break
+        return total
+    finally:
+        await consumer.stop()
 
 
 @pytest.fixture
