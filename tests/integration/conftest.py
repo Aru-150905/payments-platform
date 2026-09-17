@@ -16,12 +16,14 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 
 import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.db.base import engine
 from app.events.consumer import _new_consumer
 from app.events.consumer import drain_once as _project_once
@@ -145,10 +147,35 @@ async def client() -> AsyncIterator[AsyncClient]:
     here: both bugs this suite targets were bugs in how routes.py mapped an
     exception to a status code, which a direct service-function call would
     never exercise.
+
+    httpx's ASGITransport sends 'http' scope requests only — it never sends
+    the 'lifespan' protocol app.main.py's Redis startup relies on
+    (app.state.rate_limiter). Entering router.lifespan_context ourselves
+    runs that startup/shutdown for real, once per test, which also gives the
+    Redis client the same fresh-per-test-event-loop treatment
+    _fresh_pool_per_test and _fresh_producer_per_test already give the DB
+    engine and the Kafka producer, for the identical reason: a connection
+    bound to one test's event loop is unusable on the next test's.
     """
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://integration-test") as ac:
-        yield ac
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(app.router.lifespan_context(app))
+
+        # Every test authenticates as the same static key (ADR 0007 Decision
+        # 4 — there's only one), so without this they'd all share one
+        # sliding-window rate-limit bucket and a full suite run would start
+        # tripping app/api/rate_limit.py well before it finished, on volume
+        # that's an artifact of the test harness, not of any test's own
+        # behaviour. The limiter's own correctness is covered infra-free in
+        # tests/test_rate_limit.py; this suite is testing payment
+        # correctness and needs a clean window to do that reliably — the
+        # same "don't let unrelated shared state leak across tests"
+        # reasoning ADR 0005 already applies to the database.
+        await get_redis().delete(f"ratelimit:{settings.api_key}")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://integration-test") as ac:
+            ac.headers["X-API-Key"] = settings.api_key
+            yield ac
 
 
 async def create_account(

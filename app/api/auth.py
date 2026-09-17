@@ -24,6 +24,15 @@ def verify_api_key(provided: str, expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-async def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")) -> None:
-    if not verify_api_key(x_api_key, settings.api_key):
+async def require_api_key(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
+    """
+    The header is OPTIONAL at the FastAPI level on purpose: `Header(...)`
+    (required) makes FastAPI's own request-validation layer reject a missing
+    header with 422 before this function ever runs — a different status code
+    for "no key" than the 401 a wrong key gets here, from the same cause
+    (not authenticated). A caller shouldn't see two different codes for two
+    shades of the same rejection, so the header is optional and both cases
+    are turned into the same 401 explicitly.
+    """
+    if x_api_key is None or not verify_api_key(x_api_key, settings.api_key):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid API key")

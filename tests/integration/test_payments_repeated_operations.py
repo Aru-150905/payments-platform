@@ -26,6 +26,7 @@ import asyncio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import settings
 from app.main import app
 from tests.integration.conftest import authorize, balance_of, create_account, unique
 
@@ -93,7 +94,7 @@ async def test_concurrent_creation_with_same_key_agrees_on_one_payment(client, p
         async with AsyncClient(transport=transport, base_url="http://integration-test") as ac:
             resp = await ac.post(
                 "/payments",
-                headers={"Idempotency-Key": key},
+                headers={"Idempotency-Key": key, "X-API-Key": settings.api_key},
                 json={
                     "payer_account_id": payer["id"],
                     "payee_account_id": payee["id"],
@@ -203,7 +204,10 @@ async def test_concurrent_repeated_capture_exactly_one_wins(client, payer_payee)
 
     async def capture() -> int:
         async with AsyncClient(transport=transport, base_url="http://integration-test") as ac:
-            resp = await ac.post(f"/payments/{payment['id']}/capture")
+            resp = await ac.post(
+                f"/payments/{payment['id']}/capture",
+                headers={"X-API-Key": settings.api_key},
+            )
             return resp.status_code
 
     results = await asyncio.gather(capture(), capture())
