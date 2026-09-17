@@ -101,6 +101,12 @@ services:
       - "9090:9090"
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # prometheus.yml's rule_files: [alerts.yml] resolves relative to
+      # /etc/prometheus/ inside the container — without this mount,
+      # Prometheus starts and loads its config successfully (no error) but
+      # silently has zero alert rules, which is a much easier bug to miss
+      # than a startup failure would have been.
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       # This project's own retention discipline (app/services/retention.py)
