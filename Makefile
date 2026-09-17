@@ -27,6 +27,12 @@ topics:
 	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
 		--create --if-not-exists --topic payments.dlq.v1 --partitions 1 --replication-factor 1 \
 		--config retention.ms=604800000
+	# 3 partitions, keyed by instrument id (app/events/topics.py) — several
+	# instruments trade in parallel across partitions; all events for ONE
+	# instrument land on the same partition and stay ordered.
+	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+		--create --if-not-exists --topic trading.order.v1 --partitions 3 --replication-factor 1 \
+		--config retention.ms=604800000
 	docker exec pp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
 migrate:

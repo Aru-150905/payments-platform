@@ -10,6 +10,7 @@ from starlette.responses import Response
 
 from app.api.rate_limit import RateLimitMiddleware, new_limiter
 from app.api.routes import router
+from app.api.trading_routes import router as trading_router
 from app.core.config import settings
 from app.core.metrics import MetricsMiddleware
 from app.core.redis_client import get_redis, start_redis, stop_redis
@@ -44,6 +45,7 @@ app.add_middleware(RateLimitMiddleware)
 # docstring for why that ordering is deliberate, not incidental.
 app.add_middleware(MetricsMiddleware)
 app.include_router(router)
+app.include_router(trading_router)
 
 
 @app.get("/metrics")

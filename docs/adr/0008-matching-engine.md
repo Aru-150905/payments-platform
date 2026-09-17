@@ -190,6 +190,22 @@ payments wallet. Selling shares you don't hold fails with the *exact same*
 concept, no new check, just the existing invariant applied to a different
 unit of account.
 
+**Where the first share of any instrument comes from:** if literally no
+position account can ever go negative, nobody can ever sell a share they
+don't already hold — including the very first seller of a brand-new
+instrument, since nothing ever put a positive balance in anyone's position
+account to begin with. `app/services/trading.py`'s `_position_account()`
+answers this the same way M2 already answers the identical question for
+cash: `CLEARING_OWNER` ("platform") gets `allow_negative=True` on its
+position accounts too, not just its cash ones. "Platform" is the account
+real shares enter and leave the system through — a real venue would call
+this a treasury or issuer account; this project reuses the one privileged
+identity it already had rather than inventing a second concept for the same
+idea. `scripts/demo_trading.sh` shows the shape this takes in practice: an
+initial trade from `platform` seeds a demo seller's real position before
+that seller resells it, exactly the way `scripts/seed.py` seeds the
+platform clearing account before any payment can move real money.
+
 **What happens when a trade nets to nothing:** a self-match where both legs
 land on the *same* cash account and the *same* position account (same
 owner, same accounts on both sides of the trade) merges to zero on every

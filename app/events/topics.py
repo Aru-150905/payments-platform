@@ -24,7 +24,17 @@ from pydantic import BaseModel, Field
 PAYMENT_EVENTS = "payments.payment.v1"
 DEAD_LETTER = "payments.dlq.v1"
 
-ALL_TOPICS = [PAYMENT_EVENTS, DEAD_LETTER]
+# Carries BOTH "order.placed" and "trade.executed" event_types — one topic
+# per bounded context, same shape as PAYMENT_EVENTS carrying several
+# payment.* types. The partition KEY for these events is the INSTRUMENT id,
+# not the order or trade id (a deliberate difference from payments, where
+# the key is the payment's own id): ordering only has to hold across every
+# order/trade for ONE instrument, and Kafka's per-partition ordering
+# guarantee only holds for messages sharing a key. See
+# docs/adr/0008-matching-engine.md Decision 2 and app/services/trading.py.
+ORDER_EVENTS = "trading.order.v1"
+
+ALL_TOPICS = [PAYMENT_EVENTS, DEAD_LETTER, ORDER_EVENTS]
 
 
 # --- envelope ---------------------------------------------------------------
