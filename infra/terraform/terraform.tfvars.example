@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (gitignored) and fill in before `plan`/`apply`.
+# No secret values belong in this file — everything here is either public
+# (a repo slug, a region name) or a non-sensitive sizing knob.
+
+aws_region  = "ap-south-1"
+environment = "prod"
+
+github_repo = "your-github-username/payments-platform"
+
+# Set by CI to the image it just built and pushed (git SHA tag) — leave the
+# variables.tf default here unless you're testing a specific tag by hand.
+# container_image = "<account-id>.dkr.ecr.ap-south-1.amazonaws.com/payments-platform:abc1234"

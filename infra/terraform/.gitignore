@@ -1,0 +1,8 @@
+# .terraform.lock.hcl is NOT ignored — it pins provider versions and
+# belongs in version control, same reasoning as requirements.txt.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform.tfvars
