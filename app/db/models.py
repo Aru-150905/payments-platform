@@ -383,9 +383,18 @@ class Order(Base):
             "filled_quantity >= 0 AND filled_quantity <= quantity",
             name="ck_orders_filled_quantity_in_range",
         ),
+        # UPPERCASE, not order_type.value ('limit'/'market'): SQLAlchemy's
+        # Enum(native_enum=False) stores an enum MEMBER'S NAME by default,
+        # not its .value — the exact same reason `accounts.account_type`
+        # holds "LIABILITY" and `payments.status` holds "AUTHORIZED", not
+        # their lowercase .value counterparts. A CHECK constraint is raw SQL
+        # comparing against the literal stored string, so it has to match
+        # what's actually written to the column, not the enum's Python-side
+        # value — caught live (see M6's commit history) when this
+        # constraint rejected a perfectly legal insert.
         CheckConstraint(
-            "(order_type = 'limit' AND limit_price_minor IS NOT NULL AND limit_price_minor > 0) "
-            "OR (order_type = 'market' AND limit_price_minor IS NULL)",
+            "(order_type = 'LIMIT' AND limit_price_minor IS NOT NULL AND limit_price_minor > 0) "
+            "OR (order_type = 'MARKET' AND limit_price_minor IS NULL)",
             name="ck_orders_limit_price_matches_type",
         ),
     )

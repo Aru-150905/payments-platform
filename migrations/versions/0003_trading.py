@@ -90,9 +90,12 @@ def upgrade() -> None:
             "filled_quantity >= 0 AND filled_quantity <= quantity",
             name="ck_orders_filled_quantity_in_range",
         ),
+        # UPPERCASE — see app/db/models.py Order's __table_args__ comment:
+        # SQLAlchemy's Enum(native_enum=False) stores the member NAME
+        # ("LIMIT"/"MARKET"), not order_type.value ("limit"/"market").
         sa.CheckConstraint(
-            "(order_type = 'limit' AND limit_price_minor IS NOT NULL AND limit_price_minor > 0) "
-            "OR (order_type = 'market' AND limit_price_minor IS NULL)",
+            "(order_type = 'LIMIT' AND limit_price_minor IS NOT NULL AND limit_price_minor > 0) "
+            "OR (order_type = 'MARKET' AND limit_price_minor IS NULL)",
             name="ck_orders_limit_price_matches_type",
         ),
     )
