@@ -79,6 +79,21 @@ jobs:
             --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-api \
             --query 'taskDefinition' > task-def.json
 
+      - name: Strip read-only fields describe-task-definition adds
+        # register-task-definition's --cli-input-json rejects unknown
+        # parameters, and describe-task-definition's response carries
+        # several fields that are only ever OUTPUT, never valid INPUT:
+        # taskDefinitionArn, revision, status, requiresAttributes,
+        # compatibilities, registeredAt, registeredBy. Without this,
+        # register-task-definition fails on the very field
+        # describe-task-definition just handed back.
+        run: |
+          jq 'del(
+            .taskDefinitionArn, .revision, .status, .requiresAttributes,
+            .compatibilities, .registeredAt, .registeredBy
+          )' task-def.json > task-def.stripped.json
+          mv task-def.stripped.json task-def.json
+
       - name: Render new image into it
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -112,6 +127,21 @@ jobs:
             --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-relay \
             --query 'taskDefinition' > task-def.json
 
+      - name: Strip read-only fields describe-task-definition adds
+        # register-task-definition's --cli-input-json rejects unknown
+        # parameters, and describe-task-definition's response carries
+        # several fields that are only ever OUTPUT, never valid INPUT:
+        # taskDefinitionArn, revision, status, requiresAttributes,
+        # compatibilities, registeredAt, registeredBy. Without this,
+        # register-task-definition fails on the very field
+        # describe-task-definition just handed back.
+        run: |
+          jq 'del(
+            .taskDefinitionArn, .revision, .status, .requiresAttributes,
+            .compatibilities, .registeredAt, .registeredBy
+          )' task-def.json > task-def.stripped.json
+          mv task-def.stripped.json task-def.json
+
       - name: Render new image into it
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -144,6 +174,21 @@ jobs:
           aws ecs describe-task-definition \
             --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-worker \
             --query 'taskDefinition' > task-def.json
+
+      - name: Strip read-only fields describe-task-definition adds
+        # register-task-definition's --cli-input-json rejects unknown
+        # parameters, and describe-task-definition's response carries
+        # several fields that are only ever OUTPUT, never valid INPUT:
+        # taskDefinitionArn, revision, status, requiresAttributes,
+        # compatibilities, registeredAt, registeredBy. Without this,
+        # register-task-definition fails on the very field
+        # describe-task-definition just handed back.
+        run: |
+          jq 'del(
+            .taskDefinitionArn, .revision, .status, .requiresAttributes,
+            .compatibilities, .registeredAt, .registeredBy
+          )' task-def.json > task-def.stripped.json
+          mv task-def.stripped.json task-def.json
 
       - name: Render new image into it
         id: render
