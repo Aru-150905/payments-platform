@@ -24,31 +24,50 @@ const API_KEY = __ENV.API_KEY || "dev-local-key";
 export const options = {
   scenarios: {
     // Ordinary traffic: create an account, authorize a payment, capture it.
-    // Paced with sleep() so this scenario alone should stay under the
-    // default 60-req/min-per-key limit and never see a 429 of its own.
+    //
+    // vus=1, not several: every VU authenticates as the SAME static key
+    // (there's only one — ADR 0007 Decision 4), so concurrent VUs here
+    // wouldn't model concurrent CALLERS, they'd model one caller's budget
+    // getting divided by however many VUs k6 runs — discovered by first
+    // running this at vus=5 and watching it legitimately rate-limit itself
+    // into the 20-30% range purely from its own concurrency, nothing to do
+    // with rate_limit_burst. One VU, paced with sleep(), is what "traffic
+    // from one legitimate caller of the one key, comfortably under its own
+    // 60-req/min budget" actually looks like under this design.
     happy_path: {
       executor: "constant-vus",
       exec: "happyPath",
-      vus: 5,
-      duration: "30s",
+      vus: 1,
+      duration: "20s",
     },
     // A bad key on every request — the rejection path auth.py exists for.
+    // Buckets on its own (wrong-key) string in the rate limiter, so it
+    // never contends with happy_path's or rate_limit_burst's budget.
     unauthorized: {
       executor: "constant-vus",
       exec: "unauthorized",
       vus: 2,
-      duration: "30s",
+      duration: "20s",
     },
     // Deliberately exceeds the per-key limit: same API key, no sleep, more
     // requests than rate_limit_max_requests (default 60) can admit inside
     // rate_limit_window_ms (default 60s) — must produce 429s, and the 429
     // body/header format must match app/api/rate_limit.py exactly.
+    //
+    // Scheduled to start only AFTER happy_path finishes, not concurrently
+    // with it: this project has exactly one static API key (ADR 0007
+    // Decision 4), so happy_path and a burst sharing that same key would
+    // share the same rate-limit bucket and happy_path's own traffic would
+    // get starved by this scenario's flood — a real, documented consequence
+    // of the single-key design, not something a "separate test API key"
+    // would be a fair workaround for in a k6 script that's meant to
+    // exercise the ACTUAL single-key limitation, not paper over it.
     rate_limit_burst: {
       executor: "constant-vus",
       exec: "rateLimitBurst",
       vus: 20,
       duration: "15s",
-      startTime: "2s",
+      startTime: "22s",
     },
   },
   thresholds: {
@@ -111,7 +130,7 @@ export function happyPath() {
     });
   }
 
-  sleep(1);
+  sleep(2);
 }
 
 export function unauthorized() {
