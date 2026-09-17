@@ -39,12 +39,20 @@ class Posting:
 
 def validate_postings(postings: list[Posting]) -> dict[uuid.UUID, int]:
     """
-    Check the double-entry invariants and collapse duplicate accounts.
+    Check the STRUCTURAL double-entry invariants and collapse duplicate
+    accounts: enough postings, no zero-amount lines, and a whole-transaction
+    sum to zero as a cheap, necessary-but-not-sufficient pre-database sanity
+    check. Pulled out of post() as a pure function on purpose: it holds the
+    rules that most need testing, and it can now be tested without a
+    database, a container or a running Postgres. Anything that needs
+    infrastructure to test tends not to get tested.
 
-    Pulled out of post() as a pure function on purpose: it holds the rules that
-    most need testing, and it can now be tested without a database, a container
-    or a running Postgres. Anything that needs infrastructure to test tends not
-    to get tested.
+    "Necessary but not sufficient" since M6: a transaction can span more
+    than one currency (a trade's cash leg and position leg — see ADR 0008
+    Decision 4), and postings summing to zero as one undifferentiated total
+    does NOT mean each currency nets to zero on its own — see
+    validate_currency_balance() below, which is the check that actually
+    enforces that, once each account's currency is known.
 
     Returns {account_id: net_delta}, so each account is locked exactly once
     even if the caller passed several postings against it.
@@ -75,6 +83,42 @@ def validate_postings(postings: list[Posting]) -> dict[uuid.UUID, int]:
         raise UnbalancedTransaction("transaction affects fewer than two accounts")
 
     return merged
+
+
+def validate_currency_balance(
+    merged: dict[uuid.UUID, int], currencies: dict[uuid.UUID, str]
+) -> None:
+    """
+    The SUFFICIENT check validate_postings() can't do on its own: group each
+    account's net delta by its currency (or, for a position account,
+    instrument symbol — see ADR 0008, `currency` is reused as "unit of
+    account"), and require every group to net to zero independently.
+
+    Also pure, also pulled out on purpose, for the same testability reason
+    as validate_postings() — this is the exact rule that makes a trade's
+    cash leg and position leg a valid single transaction, and it deserves
+    its own direct tests rather than only being exercised through a live
+    ledger.post() call against a database.
+
+    Before M6 this was "exactly one currency across the whole transaction,
+    full stop" (see ledger.post()'s history). That flat rule can't express a
+    trade settlement at all, so it generalizes to "one currency's postings
+    still have to net to zero — there just might be more than one currency
+    present." A single-currency transaction satisfies this identically to
+    the old rule, because with one currency, "net to zero within the
+    currency" and "net to zero across the transaction" are the same
+    statement.
+    """
+    by_currency: dict[str, int] = {}
+    for account_id, delta in merged.items():
+        currency = currencies[account_id]
+        by_currency[currency] = by_currency.get(currency, 0) + delta
+
+    unbalanced = {currency: total for currency, total in by_currency.items() if total != 0}
+    if unbalanced:
+        raise UnbalancedTransaction(
+            f"postings do not net to zero within each currency/instrument: {unbalanced}"
+        )
 
 
 async def post(
@@ -120,14 +164,12 @@ async def post(
 
     by_id = {acc.id: (acc, bal) for acc, bal in rows}
 
-    # --- 3. Currency and funds checks -------------------------------------
-    currencies = {by_id[a][0].currency for a in account_ids}
-    if len(currencies) != 1:
-        # Cross-currency movement is a *pair* of transactions plus an FX
-        # position account, never one transaction that silently sums INR and
-        # USD into a meaningless zero.
-        raise LedgerError(f"mixed currencies in one transaction: {currencies}")
-    currency = currencies.pop()
+    # --- 3. Per-currency balance and funds checks --------------------------
+    # See validate_currency_balance()'s docstring and ADR 0008 Decision 4:
+    # this generalizes "exactly one currency" to "each currency present
+    # nets to zero on its own" — a trade's cash leg and position leg are two
+    # different units of account settling in the SAME transaction.
+    validate_currency_balance(merged, {a: by_id[a][0].currency for a in account_ids})
 
     for account_id, delta in merged.items():
         account, balance = by_id[account_id]
@@ -153,7 +195,10 @@ async def post(
                 transaction_id=tx.id,
                 account_id=account_id,
                 amount_minor=delta,
-                currency=currency,
+                # Each entry carries ITS OWN account's currency, not one
+                # shared value — the whole point of Decision 4 is that a
+                # single transaction can now carry entries in more than one.
+                currency=by_id[account_id][0].currency,
             )
         )
         by_id[account_id][1].balance_minor += delta
