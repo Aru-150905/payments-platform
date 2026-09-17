@@ -21,6 +21,17 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:29092"
     kafka_client_id: str = "payments-api"
 
+    # M7: PLAINTEXT locally (docker-compose.yml's single-node KRaft broker)
+    # is the default so nothing changes for existing dev workflows. Redpanda
+    # Cloud (docs/adr/0009-deployment.md Decision 2) requires SASL over TLS
+    # — the ECS task definitions (infra/terraform/ecs.tf) set
+    # KAFKA_SECURITY_PROTOCOL=SASL_SSL and the two SASL secrets, which is
+    # the only difference between environments; see kafka_security_kwargs().
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = "PLAIN"
+    kafka_sasl_username: str = ""
+    kafka_sasl_password: str = ""
+
     # Its own group, distinct from any other consumer this system ever adds.
     # Consumer-group offsets are tracked per (group, topic, partition), so a
     # rebuild that resets THIS group's position can never disturb another
@@ -56,6 +67,25 @@ class Settings(BaseSettings):
     # dedicated port each — see ADR 0007 Decision 3's consequences.
     relay_metrics_port: int = 9101
     consumer_metrics_port: int = 9102
+
+    def kafka_security_kwargs(self) -> dict[str, str]:
+        """
+        aiokafka connection kwargs derived from kafka_security_protocol.
+        Returns {} for the PLAINTEXT default so local dev's call sites
+        (app/events/producer.py, app/events/consumer.py) are unchanged —
+        aiokafka's own PLAINTEXT default already matches. Broken out as a
+        method rather than duplicated at each of those two call sites
+        because they need to derive the identical four kwargs from the
+        identical four settings.
+        """
+        if self.kafka_security_protocol == "PLAINTEXT":
+            return {}
+        return {
+            "security_protocol": self.kafka_security_protocol,
+            "sasl_mechanism": self.kafka_sasl_mechanism,
+            "sasl_plain_username": self.kafka_sasl_username,
+            "sasl_plain_password": self.kafka_sasl_password,
+        }
 
 
 settings = Settings()

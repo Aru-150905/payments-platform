@@ -45,6 +45,7 @@ async def start_producer() -> None:
         client_id=settings.kafka_client_id,
         value_serializer=lambda v: json.dumps(v).encode(),
         key_serializer=lambda k: k.encode() if k else None,
+        **settings.kafka_security_kwargs(),
 
         # acks="all": the write is acknowledged only after every in-sync replica
         # has it. Slower than acks=1, but acks=1 loses data if the leader dies

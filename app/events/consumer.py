@@ -134,6 +134,7 @@ def _new_consumer() -> AIOKafkaConsumer:
         # assumes this consumer is dead and reassigns its partitions. Too low
         # and a slow batch triggers an endless rebalance loop.
         max_poll_interval_ms=300_000,
+        **settings.kafka_security_kwargs(),
     )
 
 
