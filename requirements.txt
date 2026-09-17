@@ -7,3 +7,8 @@ asyncpg==0.30.0
 alembic==1.14.0
 redis==5.2.1
 aiokafka==0.12.0
+# Standard client for the Prometheus exposition format — Counter/Histogram/Gauge
+# types, a registry, and /metrics text serialization. Nothing in the stdlib
+# or an existing dependency covers that wire format; hand-rolling it would
+# be redundant with the one library the whole scrape ecosystem expects.
+prometheus-client==0.21.1

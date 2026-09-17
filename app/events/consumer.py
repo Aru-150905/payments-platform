@@ -15,9 +15,11 @@ import signal
 import uuid
 
 from aiokafka import AIOKafkaConsumer
+from prometheus_client import start_http_server
 from sqlalchemy import delete, text
 from sqlalchemy.exc import IntegrityError
 
+from app.core import metrics
 from app.core.config import settings
 from app.db.base import SessionLocal
 from app.db.models import ProcessedEvent
@@ -89,7 +91,35 @@ async def drain_once(consumer: AIOKafkaConsumer) -> int:
             count += 1
     if batch:
         await consumer.commit()
+    # Updated every cycle, not just when the batch was non-empty: an idle
+    # topic still needs a fresh lag=0 reading, and a genuinely stuck consumer
+    # (never reaching this line) is exactly the case this metric exists to
+    # surface via a lag reading that stops updating at all — see ADR 0007
+    # Decision 3.
+    await _record_lag(consumer)
     return count
+
+
+async def _record_lag(consumer: AIOKafkaConsumer) -> None:
+    """
+    lag = high-water mark (next offset the broker would assign) minus this
+    consumer's own position (next offset it will fetch). enable_auto_commit
+    is False and drain_once() commits right after processing, so `position`
+    and the actually-committed offset agree by the time this runs — cheaper
+    than a second round trip to ask the broker what was committed.
+    """
+    partitions = consumer.assignment()
+    if not partitions:
+        return
+    end_offsets = await consumer.end_offsets(list(partitions))
+    for tp in partitions:
+        position = await consumer.position(tp)
+        lag = max(0, end_offsets[tp] - position)
+        metrics.kafka_consumer_lag.labels(
+            topic=tp.topic,
+            partition=str(tp.partition),
+            group=settings.read_model_consumer_group,
+        ).set(lag)
 
 
 def _new_consumer() -> AIOKafkaConsumer:
@@ -108,6 +138,9 @@ def _new_consumer() -> AIOKafkaConsumer:
 
 
 async def run() -> None:
+    # This process is never part of the FastAPI app, so it needs its own
+    # /metrics HTTP endpoint — see ADR 0007 Decision 3's consequences.
+    start_http_server(settings.consumer_metrics_port)
     consumer = _new_consumer()
     await consumer.start()
     log.info("read-model consumer started, group=%s", settings.read_model_consumer_group)

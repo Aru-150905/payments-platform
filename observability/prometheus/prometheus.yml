@@ -1,0 +1,25 @@
+# Scrape config for the "observability" compose profile — see docker-compose.yml.
+#
+# Targets are host.docker.internal, not localhost or container names: the
+# API, relay, and read-model consumer run on the HOST via `make api`/`relay`/
+# `worker` (see Makefile), not as containers in this compose stack, so
+# Prometheus (which IS a container) has to reach back out to the host to
+# scrape them. host.docker.internal is Docker Desktop's DNS name for that —
+# this only works with Docker Desktop (Mac/Windows), not plain Linux Docker.
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  - job_name: relay
+    static_configs:
+      # app/core/config.py: settings.relay_metrics_port
+      - targets: ["host.docker.internal:9101"]
+
+  - job_name: read_model_consumer
+    static_configs:
+      # app/core/config.py: settings.consumer_metrics_port
+      - targets: ["host.docker.internal:9102"]

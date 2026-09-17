@@ -1,0 +1,10 @@
+# Points Grafana at the dashboard JSON files mounted into the container at
+# /etc/grafana/dashboards (see docker-compose.yml's grafana volumes).
+apiVersion: 1
+
+providers:
+  - name: m5
+    folder: M5
+    type: file
+    options:
+      path: /etc/grafana/dashboards

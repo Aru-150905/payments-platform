@@ -1,0 +1,14 @@
+# Auto-provisioned so `docker compose --profile observability up -d` gives a
+# working Grafana with no manual "add datasource" click-through.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Service name, not host.docker.internal: Grafana and Prometheus are
+    # both containers on the same compose network, so they reach each other
+    # by service name — it's only the app processes on the HOST that need
+    # host.docker.internal (see observability/prometheus/prometheus.yml).
+    url: http://prometheus:9090
+    isDefault: true

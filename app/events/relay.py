@@ -14,8 +14,10 @@ import logging
 import signal
 from datetime import UTC, datetime
 
+from prometheus_client import start_http_server
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.base import SessionLocal
 from app.db.models import OutboxEvent
 from app.events.producer import publish, start_producer, stop_producer
@@ -73,6 +75,10 @@ async def drain_once() -> int:
 
 
 async def run() -> None:
+    # This process is never part of the FastAPI app (see this module's
+    # docstring), so it needs its own /metrics HTTP endpoint rather than
+    # riding on app/main.py's — see ADR 0007 Decision 3's consequences.
+    start_http_server(settings.relay_metrics_port)
     await start_producer()
 
     stopping = asyncio.Event()

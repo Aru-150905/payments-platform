@@ -83,5 +83,52 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       DYNAMIC_CONFIG_ENABLED: "true"
 
+  # Opt-in: `docker compose --profile observability up -d`. Off by default —
+  # this dev machine has 8GB total, already spent on Postgres, Redis, and a
+  # heap-capped Kafka. Prometheus and Grafana are both small Go binaries (not
+  # another JVM), but two more always-on services is still real memory
+  # pressure for a milestone whose point — seeing the four ADR 0007 metrics —
+  # only needs them running for as long as a demo takes, not all the time.
+  #
+  # The API, relay, and worker run on the HOST (`make api`/`relay`/`worker`),
+  # not in this compose stack, so Prometheus scrapes them via Docker
+  # Desktop's host.docker.internal — see observability/prometheus/prometheus.yml.
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1
+    container_name: pp-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # This project's own retention discipline (app/services/retention.py)
+      # doesn't apply here — this is scrape data for a live demo, not an
+      # audit trail. 2h is plenty and keeps the volume-less container's disk
+      # use bounded without needing a named volume for a profile that's off
+      # by default anyway.
+      - --storage.tsdb.retention.time=2h
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.4.0
+    container_name: pp-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      # Anonymous admin, no login screen: this is a localhost-only dev
+      # profile behind no public port forwarding, not a shared environment —
+      # the tradeoff real auth (ADR 0007 Decision 4) is about doesn't apply
+      # to a single-developer laptop's own Grafana.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+
 volumes:
   pgdata:

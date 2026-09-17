@@ -4,11 +4,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
+from starlette.responses import Response
 
 from app.api.rate_limit import RateLimitMiddleware, new_limiter
 from app.api.routes import router
 from app.core.config import settings
+from app.core.metrics import MetricsMiddleware
 from app.core.redis_client import get_redis, start_redis, stop_redis
 from app.db.base import SessionLocal
 
@@ -36,7 +39,22 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 # 404 or fail auth — intentional, since an unauthenticated flood is exactly
 # what this exists to cap. See app/api/rate_limit.py.
 app.add_middleware(RateLimitMiddleware)
+# Added last so Starlette makes it the OUTERMOST layer, timing and counting
+# literally everything this process responds with — see MetricsMiddleware's
+# docstring for why that ordering is deliberate, not incidental.
+app.add_middleware(MetricsMiddleware)
 app.include_router(router)
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """
+    Deliberately unauthenticated and rate-limit-exempt (app/api/rate_limit.py's
+    EXEMPT_PATHS) — Prometheus scrapes this on its own fixed interval and
+    can't be handed an API key any more than a load balancer's health check
+    probe can.
+    """
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health/live")

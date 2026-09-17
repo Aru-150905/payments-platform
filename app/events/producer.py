@@ -13,9 +13,15 @@ import logging
 
 from aiokafka import AIOKafkaProducer
 
+from app.core import metrics
 from app.core.circuit_breaker import CircuitBreaker, CircuitOpenError
 from app.core.config import settings
 from app.events.topics import EventEnvelope
+
+# Label for the one breaker this process has. A future second producer
+# (unlikely per CLAUDE.md's "no microservices") would need its own label,
+# not a reuse of this one, or the two would overwrite each other's gauge.
+_BREAKER_COMPONENT = "relay_producer"
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +90,7 @@ async def publish(topic: str, event: EventEnvelope) -> None:
         raise RuntimeError("producer not started")
 
     if not _breaker.allow_request():
+        metrics.record_breaker_state(_BREAKER_COMPONENT, _breaker.state)
         raise CircuitOpenError("kafka producer circuit is open; broker considered unavailable")
 
     try:
@@ -97,3 +104,5 @@ async def publish(topic: str, event: EventEnvelope) -> None:
         raise
     else:
         _breaker.record_success()
+    finally:
+        metrics.record_breaker_state(_BREAKER_COMPONENT, _breaker.state)

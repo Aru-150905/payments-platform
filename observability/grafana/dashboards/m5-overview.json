@@ -1,0 +1,65 @@
+{
+  "id": null,
+  "uid": "m5-observability",
+  "title": "M5 — rate limit, breaker, and the metric that matters",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP requests/sec, by route and status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[1m])) by (route, status)",
+          "legendFormat": "{{route}} [{{status}}]"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP request duration, p95 by route",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "legendFormat": "{{route}} p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Kafka producer circuit breaker (0=closed 1=half_open 2=open)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 2 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "kafka_circuit_breaker_state",
+          "legendFormat": "{{component}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Kafka consumer lag — the metric that matters (ADR 0007)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "kafka_consumer_lag",
+          "legendFormat": "{{topic}}/{{partition}} ({{group}})"
+        }
+      ]
+    }
+  ]
+}

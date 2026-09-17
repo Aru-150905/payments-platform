@@ -1,11 +1,17 @@
-.PHONY: up ui down topics migrate seed api worker relay logs demo \
-	rebuild-read-model reconcile retention-purge
+.PHONY: up ui observability down topics migrate seed api worker relay logs demo \
+	rebuild-read-model reconcile retention-purge load-test
 
 up:
 	docker compose up -d
 
 ui:
 	docker compose --profile ui up -d kafka-ui
+
+# Off by default — see docker-compose.yml's comment on the "observability"
+# profile for why (8GB dev machine). Prometheus: http://localhost:9090,
+# Grafana (anonymous admin, no login): http://localhost:3000.
+observability:
+	docker compose --profile observability up -d prometheus grafana
 
 down:
 	docker compose down -v
@@ -54,3 +60,9 @@ reconcile:
 
 retention-purge:
 	python -m scripts.retention
+
+# Needs the API running (`make api`) and k6 installed separately — it's a
+# standalone Go binary, not a Python dependency. See k6/m5_load_test.js's
+# header comment for what it exercises and why.
+load-test:
+	k6 run k6/m5_load_test.js
