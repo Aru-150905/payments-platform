@@ -124,6 +124,22 @@ variable "worker_desired_count" {
   default = 1
 }
 
+# --- Kafka (Redpanda Cloud Serverless) ------------------------------------------
+
+variable "redpanda_serverless_region" {
+  description = <<-EOT
+    Redpanda Cloud Serverless region name — Redpanda's own region
+    identifiers, NOT an AWS region string, and not necessarily the same
+    value as var.aws_region. The real list requires the
+    redpanda_serverless_regions data source (needs REDPANDA_CLIENT_ID/
+    REDPANDA_CLIENT_SECRET, which this environment doesn't have) or the
+    Redpanda Cloud console. `validate` works with this placeholder;
+    `plan`/`apply` need the real value set first.
+  EOT
+  type        = string
+  default     = "REPLACE_ME"
+}
+
 # --- CI/CD OIDC ----------------------------------------------------------------
 
 variable "github_repo" {

@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # See redpanda.tf's file-level comment: the one non-AWS resource in this
+    # stack, ADR 0009 Decision 2's managed Kafka.
+    redpanda = {
+      source  = "redpanda-data/redpanda"
+      version = "~> 2.0"
+    }
   }
 
   # Local backend by default — state lives in this directory, gitignored

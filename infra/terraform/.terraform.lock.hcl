@@ -23,3 +23,25 @@ provider "registry.terraform.io/hashicorp/aws" {
     "zh:ff461571e3f233699bf690db319dfe46aec75e58726636a0d97dd9ac6e32fb70",
   ]
 }
+
+provider "registry.terraform.io/redpanda-data/redpanda" {
+  version     = "2.4.0"
+  constraints = "~> 2.0"
+  hashes = [
+    "h1:TcwSwP6LlyyYheZAsyYfm5q3iCz/RoP4hUJ29XGSne0=",
+    "zh:1c9a743f58a0fa66760f4124563cfafbea894e89031d006e0f7a129aae58f49b",
+    "zh:255da13f544bb2da90eb10d5db6ee0ed27f3c21b41e792e897656884b0a2ce21",
+    "zh:2db5efbf22155b3bb384d5a35c4118ee7d9cd285bc48f48eea76bfc26d4b4882",
+    "zh:3b166fe8962fe308d4c2c2270ddd206c98e78e7d6b5704953b41d6d1b03ce2a0",
+    "zh:6da22bd81081aad9d63e186fa428d54079e38eeb7be85763f2f925471fe92f60",
+    "zh:8426033efe2e3c284cc115550a8da06a696d0222e19cc816cca3dfeabed06d95",
+    "zh:9bad1da692d2dd4662e3ff4c3659083a44fb4d839649dd15a3f157f5addeebb2",
+    "zh:a33d53acc640dc93b81352ba633cf392bc8c7614a72d320d59d3dcdb22d73fc4",
+    "zh:acda802830a5f4cbe0771d19d958b5175e37febd40a28190bab8b60d0aa1889b",
+    "zh:ae63f00bf21d333ce5e138fd8956f7e89f7313f611dbfd4e0e4578ceeac699d1",
+    "zh:cc51be870958b05eba8179c28bbba0f0f2f8a71eb2f0048e06e0f8260d56c079",
+    "zh:d90c3d8c522a877fe3bd9241498070b85c570607344b059d93465b783e4527ea",
+    "zh:da54df0ea066925d775434c5fbde827f5d7daa9f545c2196e81287a65454d00f",
+    "zh:e54561ada41fc31b00dfb2a1da8d3b68110ab6f3cf9a7e6608118d19c7d677f2",
+  ]
+}
