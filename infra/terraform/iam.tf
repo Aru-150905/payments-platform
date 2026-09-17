@@ -158,11 +158,43 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
       {
         # Registering a task definition that references these roles requires
         # the caller be allowed to pass them to ECS — without this, a
-        # RegisterTaskDefinition call that names either role fails.
+        # RegisterTaskDefinition call that names either role fails. RunTask
+        # (below) needs the identical permission for the same reason: it's
+        # ECS itself assuming these roles on the caller's behalf to start a
+        # task, not the caller assuming them directly.
         Sid      = "PassEcsRoles"
         Effect   = "Allow"
         Action   = "iam:PassRole"
         Resource = [aws_iam_role.ecs_task_execution.arn, aws_iam_role.ecs_task.arn]
+      },
+      {
+        # .github/workflows/deploy.yml's `migrate` job: `alembic upgrade
+        # head` as a one-off task (a command override on the api task
+        # definition), run and waited on BEFORE any service points at the
+        # new revision. Scoped to the api family specifically (not "*",
+        # like RegisterTaskDefinition/DescribeTaskDefinition above have to
+        # be) and to this cluster only, via the ecs:cluster condition key —
+        # this role can start a migration task, not an arbitrary task
+        # definition on an arbitrary cluster in the account.
+        Sid      = "RunMigrationTask"
+        Effect   = "Allow"
+        Action   = "ecs:RunTask"
+        Resource = "arn:aws:ecs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:task-definition/${aws_ecs_task_definition.api.family}:*"
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.main.arn
+          }
+        }
+      },
+      {
+        # deploy.yml polls `aws ecs wait tasks-stopped` / `describe-tasks`
+        # for that same migration task's exit code — DescribeTasks has no
+        # task-definition-family scoping, only cluster, so this is as tight
+        # as this action gets.
+        Sid      = "DescribeMigrationTask"
+        Effect   = "Allow"
+        Action   = "ecs:DescribeTasks"
+        Resource = "arn:aws:ecs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.main.name}/*"
       },
     ]
   })
