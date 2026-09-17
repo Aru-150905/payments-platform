@@ -9,6 +9,9 @@
 global:
   scrape_interval: 5s
 
+rule_files:
+  - alerts.yml
+
 scrape_configs:
   - job_name: api
     static_configs:

@@ -1,0 +1,93 @@
+# Alert rules for the four metrics ADR 0007 Decision 3 defines. Prometheus
+# evaluates these and exposes firing state in its own UI (:9090/alerts) and
+# to Grafana — no Alertmanager is deployed (no routing to Slack/PagerDuty/
+# email) since this is a single-operator portfolio project with no on-call
+# rotation to route to; see docs/runbook.md for what a human does when one
+# of these is firing, checked by hand rather than paged.
+#
+# Loaded by observability/prometheus/prometheus.yml's rule_files.
+
+groups:
+  - name: payments-platform
+    rules:
+      - alert: HighHttpErrorRate
+        # 5% over 5 minutes, not a raw count: an absolute threshold would
+        # either be too sensitive at low traffic (a demo script's first few
+        # requests) or too late at high traffic. Ratio-of-total is the
+        # threshold that means the same thing at any volume.
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+          sum(rate(http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of API responses are 5xx"
+          description: >-
+            The api process is failing requests at an elevated rate. Check
+            /health/ready and recent api logs first — see docs/runbook.md's
+            "HighHttpErrorRate" entry.
+
+      - alert: HighHttpLatencyP95
+        # 1s: this API does one DB round trip per write (the outbox insert),
+        # no synchronous Kafka call (ADR 0002) — a healthy p95 lives well
+        # under 1s, so crossing it for 5 straight minutes means something
+        # real (DB contention, a slow query, CPU starvation), not noise.
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+          > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency over 1s for 5+ minutes"
+          description: >-
+            See docs/runbook.md's "HighHttpLatencyP95" entry — usually
+            Postgres connection pool exhaustion or a slow query, not Kafka
+            (the api never talks to Kafka directly).
+
+      - alert: KafkaCircuitBreakerOpen
+        # No `for:` delay — an open breaker (state 2) is already the
+        # circuit breaker's own considered decision (ADR 0007 Decision 2:
+        # it only opens after 5 consecutive failures), not a transient blip
+        # worth debouncing further.
+        expr: kafka_circuit_breaker_state{component="relay_producer"} == 2
+        labels:
+          severity: critical
+        annotations:
+          summary: "The relay's Kafka producer circuit breaker is open"
+          description: >-
+            The relay cannot reach Kafka. Outbox rows keep accumulating
+            (writes still succeed — ADR 0002) but nothing is being
+            published. See docs/runbook.md's "KafkaCircuitBreakerOpen"
+            entry.
+
+      - alert: KafkaConsumerLagHigh
+        # 1000 messages, 10 minutes: ADR 0007's own reasoning for why this
+        # metric exists — it's the one signal that can catch a dead or
+        # wedged consumer while the API reports perfectly healthy. 1000 is
+        # comfortably above the normal catch-up bump right after a rolling
+        # deploy (ecs.tf's brief two-worker overlap) but low enough to catch
+        # a stall well before read_model_payments is stale enough to matter.
+        expr: max(kafka_consumer_lag) by (topic, group) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer group is 1000+ messages behind for 10+ minutes"
+          description: >-
+            See docs/runbook.md's "Checking consumer lag" and "Replay"
+            sections.
+
+      - alert: KafkaConsumerLagCritical
+        expr: max(kafka_consumer_lag) by (topic, group) > 10000
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consumer group is 10000+ messages behind for 10+ minutes"
+          description: >-
+            The read-model consumer is very likely dead or stuck, not just
+            slow. See docs/runbook.md's "Checking consumer lag" section.
