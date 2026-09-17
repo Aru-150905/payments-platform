@@ -1,0 +1,243 @@
+name: deploy
+
+# Tags only, never a branch push — ci.yml already gates every push/PR to
+# main with lint + unit + integration; a tag is the deliberate "this commit,
+# specifically, goes to prod" signal, matching the runbook's own rollback
+# story (roll back = redeploy a PREVIOUS tag's image, never "revert and
+# re-push main").
+on:
+  push:
+    tags: ["v*.*.*"]
+
+# OIDC federation, not a long-lived AWS key in a GitHub secret — see ADR
+# 0009's secrets section and infra/terraform/iam.tf's github_actions_deploy
+# role. `id-token: write` is what lets this workflow request a short-lived
+# token from GitHub's own OIDC issuer.
+permissions:
+  id-token: write
+  contents: read
+
+# Every `vars.*` below is a GitHub Actions repository VARIABLE (Settings ->
+# Actions -> Variables, not Secrets — none of these values are sensitive,
+# they're resource identifiers), set once by hand after a real
+# `terraform apply` from that apply's outputs. See infra/terraform/README.md
+# for the exact `terraform output` -> variable mapping. Real credential
+# VALUES (DATABASE_URL, API_KEY, ...) never appear here at all — the running
+# ECS tasks resolve those straight from Secrets Manager (ecs.tf's `secrets`
+# block), which this workflow never touches.
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr-login
+
+      - name: Build and push
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY_NAME }}
+          # The git SHA, not `latest` — infra/terraform/variables.tf's
+          # container_image comment explains why: a deploy is always a
+          # specific, traceable image, never "whatever :latest points to."
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$REPOSITORY:$TAG" .
+          docker push "$REGISTRY/$REPOSITORY:$TAG"
+          echo "image=$REGISTRY/$REPOSITORY:$TAG" >> "$GITHUB_OUTPUT"
+
+  # One job per service, not a matrix: each needs its OWN job-level output
+  # (the newly registered task definition ARN) consumed individually by
+  # later jobs, which GitHub Actions matrix jobs make awkward to aggregate
+  # cleanly. Explicit is also just easier to read top-to-bottom for a
+  # three-service deploy that doesn't change shape often.
+
+  register-api:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    outputs:
+      task-def-arn: ${{ steps.register.outputs.task-def-arn }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-api \
+            --query 'taskDefinition' > task-def.json
+
+      - name: Render new image into it
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: api
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      - name: Register the new revision
+        id: register
+        run: |
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://${{ steps.render.outputs.task-definition }} \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task-def-arn=$ARN" >> "$GITHUB_OUTPUT"
+
+  register-relay:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    outputs:
+      task-def-arn: ${{ steps.register.outputs.task-def-arn }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-relay \
+            --query 'taskDefinition' > task-def.json
+
+      - name: Render new image into it
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: relay
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      - name: Register the new revision
+        id: register
+        run: |
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://${{ steps.render.outputs.task-definition }} \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task-def-arn=$ARN" >> "$GITHUB_OUTPUT"
+
+  register-worker:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    outputs:
+      task-def-arn: ${{ steps.register.outputs.task-def-arn }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition payments-platform-${{ vars.ECS_ENVIRONMENT }}-worker \
+            --query 'taskDefinition' > task-def.json
+
+      - name: Render new image into it
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: worker
+          image: ${{ needs.build-and-push.outputs.image }}
+
+      - name: Register the new revision
+        id: register
+        run: |
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://${{ steps.render.outputs.task-definition }} \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task-def-arn=$ARN" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    runs-on: ubuntu-latest
+    # Depends on the API's new revision specifically: that container
+    # definition already carries the right image and the DATABASE_URL
+    # secret, so running the migration is "the same task definition,
+    # command overridden" rather than a fourth hand-built task definition
+    # with its own copy of the same secrets wiring to keep in sync.
+    needs: register-api
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run alembic upgrade head as a one-off task
+        # Runs BEFORE any service points at the new revision (see the
+        # `needs:` on deploy-api/relay/worker below) — schema changes land
+        # before code that might depend on them starts serving traffic.
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ vars.ECS_CLUSTER_NAME }} \
+            --task-definition ${{ needs.register-api.outputs.task-def-arn }} \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ vars.ECS_SUBNET_IDS }}],securityGroups=[${{ vars.ECS_SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "waiting for migration task $TASK_ARN"
+          aws ecs wait tasks-stopped --cluster ${{ vars.ECS_CLUSTER_NAME }} --tasks "$TASK_ARN"
+
+          EXIT_CODE=$(aws ecs describe-tasks --cluster ${{ vars.ECS_CLUSTER_NAME }} --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "migration task exited $EXIT_CODE — see CloudWatch Logs (docs/runbook.md)"
+            exit 1
+          fi
+          echo "migration task exited 0"
+
+  deploy-api:
+    runs-on: ubuntu-latest
+    needs: [register-api, migrate]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: |
+          aws ecs update-service \
+            --cluster ${{ vars.ECS_CLUSTER_NAME }} --service api \
+            --task-definition ${{ needs.register-api.outputs.task-def-arn }}
+          aws ecs wait services-stable --cluster ${{ vars.ECS_CLUSTER_NAME }} --services api
+
+  deploy-relay:
+    runs-on: ubuntu-latest
+    needs: [register-relay, migrate]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: |
+          aws ecs update-service \
+            --cluster ${{ vars.ECS_CLUSTER_NAME }} --service relay \
+            --task-definition ${{ needs.register-relay.outputs.task-def-arn }}
+          aws ecs wait services-stable --cluster ${{ vars.ECS_CLUSTER_NAME }} --services relay
+
+  deploy-worker:
+    runs-on: ubuntu-latest
+    needs: [register-worker, migrate]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: |
+          aws ecs update-service \
+            --cluster ${{ vars.ECS_CLUSTER_NAME }} --service worker \
+            --task-definition ${{ needs.register-worker.outputs.task-def-arn }}
+          aws ecs wait services-stable --cluster ${{ vars.ECS_CLUSTER_NAME }} --services worker

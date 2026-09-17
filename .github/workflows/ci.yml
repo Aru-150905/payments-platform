@@ -19,13 +19,133 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest ruff
+          pip install -r requirements-dev.txt
 
       - name: Lint
         run: ruff check .
 
       - name: Unit tests
-        # These deliberately need no database and no Kafka, which is why they
-        # run in ~2 seconds on every push. Integration tests against the real
-        # compose stack land in M3 as a separate, slower job.
+        # Deliberately infra-free — no database, no Kafka (pyproject.toml's
+        # addopts excludes -m integration by default) — which is why this
+        # runs in under a second on every push/PR. The `integration` job
+        # below is the slower, infra-backed suite.
         run: pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the application image
+        # Proves the Dockerfile builds cleanly on every push/PR. Not pushed
+        # anywhere here — .github/workflows/deploy.yml builds (and pushes)
+        # the real release image, only on a tag.
+        run: docker build -t payments-platform:ci .
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: payments
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d payments"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+      # Same image and KRaft config as docker-compose.yml's kafka service,
+      # adapted for a service container that isn't on a docker-compose
+      # network: this job runs its own steps directly on the runner (no
+      # job-level `container:`), so the service is reachable from those
+      # steps only via localhost:<mapped-port> — there's no "kafka" hostname
+      # to advertise the way the compose file's PLAINTEXT listener does.
+      # Single-broker KRaft means the broker's inter-broker and controller
+      # traffic is also just "talk to myself," so advertising localhost for
+      # every listener is correct here, not a compose-specific hack ported
+      # over wrong.
+      kafka:
+        image: apache/kafka:3.9.0
+        ports:
+          - 29092:29092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+          KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_HOST://localhost:29092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+          KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s --health-timeout 10s --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/payments
+      REDIS_URL: redis://localhost:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: localhost:29092
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Create Kafka topics
+        # Mirrors the Makefile's `topics` target exactly (same names,
+        # partitions, retention) — found by image rather than by a
+        # compose-assigned container name, since this job has neither.
+        run: |
+          KAFKA_CID=$(docker ps --filter "ancestor=apache/kafka:3.9.0" --format "{{.ID}}")
+          docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --if-not-exists --topic payments.payment.v1 --partitions 3 --replication-factor 1 \
+            --config retention.ms=604800000
+          docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --if-not-exists --topic payments.dlq.v1 --partitions 1 --replication-factor 1 \
+            --config retention.ms=604800000
+          docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+            --create --if-not-exists --topic trading.order.v1 --partitions 3 --replication-factor 1 \
+            --config retention.ms=604800000
+
+      - name: Seed the platform clearing account
+        run: python -m scripts.seed
+
+      - name: Integration tests
+        # Twice in a row, not once — CLAUDE.md's own bug history (three of
+        # six bugs involved state carried between invocations) is exactly
+        # what ADR 0005's isolation strategy exists to catch, and a suite
+        # that only passes on a fresh database hides precisely that class
+        # of bug. Matches how this suite is run locally before every push.
+        run: |
+          pytest -q -m integration
+          pytest -q -m integration
