@@ -13,12 +13,20 @@ import logging
 
 from aiokafka import AIOKafkaProducer
 
+from app.core.circuit_breaker import CircuitBreaker, CircuitOpenError
 from app.core.config import settings
 from app.events.topics import EventEnvelope
 
 log = logging.getLogger(__name__)
 
 _producer: AIOKafkaProducer | None = None
+
+# One breaker for the process's one producer — see docs/adr/0007-observability.md
+# Decision 2 for the state machine and why it beats a naive retry loop here.
+_breaker = CircuitBreaker(
+    failure_threshold=settings.circuit_breaker_failure_threshold,
+    recovery_timeout_s=settings.circuit_breaker_recovery_timeout_s,
+)
 
 
 async def start_producer() -> None:
@@ -66,12 +74,26 @@ async def publish(topic: str, event: EventEnvelope) -> None:
     once a DB write is involved: if the DB commit succeeds and this call fails,
     the world disagrees with your database. That is what the transactional
     outbox (next milestone) fixes.
+
+    Guarded by the module's circuit breaker: while OPEN, this raises
+    CircuitOpenError immediately instead of attempting the network call at
+    all, so a dead broker fails in microseconds instead of after a full
+    produce timeout — see ADR 0007 Decision 2.
     """
     if _producer is None:
         raise RuntimeError("producer not started")
 
-    await _producer.send_and_wait(
-        topic,
-        key=event.aggregate_id,
-        value=json.loads(event.model_dump_json()),
-    )
+    if not _breaker.allow_request():
+        raise CircuitOpenError("kafka producer circuit is open; broker considered unavailable")
+
+    try:
+        await _producer.send_and_wait(
+            topic,
+            key=event.aggregate_id,
+            value=json.loads(event.model_dump_json()),
+        )
+    except Exception:
+        _breaker.record_failure()
+        raise
+    else:
+        _breaker.record_success()

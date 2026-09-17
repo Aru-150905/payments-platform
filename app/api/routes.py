@@ -8,12 +8,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.auth import require_api_key
 from app.db.base import get_session
 from app.db.models import Account, AccountType, Balance, Payment
 from app.domain.state_machine import IllegalTransition
 from app.services import ledger, payments
 
-router = APIRouter()
+# Applied to every route below, not per-endpoint — see ADR 0007 Decision 4.
+# /health/* and /metrics are defined directly on `app` in main.py, outside
+# this router, and deliberately stay unauthenticated (a load balancer and
+# Prometheus can't be handed an API key to poll them with).
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 # --------------------------------------------------------------------------

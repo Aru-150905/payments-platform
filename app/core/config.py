@@ -33,5 +33,29 @@ class Settings(BaseSettings):
     kafka_topic_retention_hours: int = 168  # 7 days
     processed_events_retention_hours: int = 192  # 8 days: retention + 24h margin
 
+    # M5: a single shared secret, not per-caller credentials — see ADR 0007
+    # Decision 4 for what that tradeoff costs and why it's the right size for
+    # this project. Checked with hmac.compare_digest, never `==` (timing).
+    api_key: str = "dev-local-key"
+
+    # M5: sliding-window rate limit, enforced in Redis — see ADR 0007
+    # Decision 1. Applies per caller (the API key), to every request that
+    # passes auth.
+    rate_limit_window_ms: int = 60_000  # 1 minute
+    rate_limit_max_requests: int = 60
+
+    # M5: circuit breaker around the relay's Kafka producer — see ADR 0007
+    # Decision 2. Guesses, not measurements (no production traffic to tune
+    # against yet), which is exactly why they're config and not constants.
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_recovery_timeout_s: float = 30.0
+
+    # M5: where each process's own Prometheus scrape endpoint listens. The
+    # API exposes /metrics on its own FastAPI port; the relay and consumer
+    # are standalone processes (not part of the FastAPI app) and need a
+    # dedicated port each — see ADR 0007 Decision 3's consequences.
+    relay_metrics_port: int = 9101
+    consumer_metrics_port: int = 9102
+
 
 settings = Settings()
