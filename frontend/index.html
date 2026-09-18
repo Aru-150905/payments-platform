@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>payments-platform console</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="topbar">
+    <h1><span id="status-dot" class="dot"></span>payments-platform</h1>
+    <div class="key-field">
+      <label for="api-base">API</label>
+      <input id="api-base" type="text" value="http://localhost:8000" />
+    </div>
+    <div class="key-field">
+      <label for="api-key">Key</label>
+      <input id="api-key" type="text" placeholder="X-API-Key" value="dev-local-key" />
+    </div>
+    <div class="spacer"></div>
+    <span class="hint" id="last-checked">checking&hellip;</span>
+  </div>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="accounts">Accounts</button>
+    <button class="tab-btn" data-tab="payments">Payments</button>
+    <button class="tab-btn" data-tab="trading">Trading</button>
+  </nav>
+
+  <main>
+
+    <!-- ==================== ACCOUNTS ==================== -->
+    <section class="panel active" id="panel-accounts">
+      <div class="grid">
+        <div class="card">
+          <h2>New account</h2>
+          <form id="form-account">
+            <div class="field">
+              <label for="acc-owner">Owner ID</label>
+              <input type="text" id="acc-owner" placeholder="e.g. alice" required />
+            </div>
+            <div class="field">
+              <label for="acc-name">Name</label>
+              <input type="text" id="acc-name" placeholder="wallet" value="wallet" required />
+            </div>
+            <div class="row">
+              <div class="field">
+                <label for="acc-currency">Currency</label>
+                <input type="text" id="acc-currency" value="INR" maxlength="16" required />
+              </div>
+              <div class="field">
+                <label for="acc-type">Type</label>
+                <select id="acc-type">
+                  <option value="liability" selected>liability</option>
+                  <option value="asset">asset</option>
+                  <option value="equity">equity</option>
+                  <option value="revenue">revenue</option>
+                  <option value="expense">expense</option>
+                </select>
+              </div>
+            </div>
+            <div class="field checkbox-field">
+              <input type="checkbox" id="acc-negative" />
+              <label for="acc-negative">Allow negative balance</label>
+            </div>
+            <button class="btn" type="submit">Create account</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Accounts <span class="count" id="accounts-count">0</span>
+            <span class="section-actions"><button class="btn secondary small" data-refresh="accounts">Refresh</button></span>
+          </h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Owner</th><th>Name</th><th>Currency</th><th class="num">Balance</th><th>ID</th>
+              </tr></thead>
+              <tbody id="accounts-body"><tr class="empty-row"><td colspan="5">No accounts yet</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== PAYMENTS ==================== -->
+    <section class="panel" id="panel-payments">
+      <div class="grid">
+        <div class="card">
+          <h2>New payment</h2>
+          <form id="form-payment">
+            <div class="field">
+              <label for="pay-payer">Payer account</label>
+              <select id="pay-payer" required></select>
+            </div>
+            <div class="field">
+              <label for="pay-payee">Payee account</label>
+              <select id="pay-payee" required></select>
+            </div>
+            <div class="row">
+              <div class="field">
+                <label for="pay-amount">Amount (minor units)</label>
+                <input type="number" id="pay-amount" min="1" placeholder="250000" required />
+              </div>
+              <div class="field">
+                <label for="pay-currency">Currency</label>
+                <input type="text" id="pay-currency" value="INR" required />
+              </div>
+            </div>
+            <p class="hint">A fresh Idempotency-Key is generated per submit.</p>
+            <button class="btn" type="submit">Authorize payment</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Payments <span class="count" id="payments-count">0</span>
+            <span class="section-actions"><button class="btn secondary small" data-refresh="payments">Refresh</button></span>
+          </h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Status</th><th class="num">Amount</th><th>Currency</th><th>ID</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="payments-body"><tr class="empty-row"><td colspan="5">No payments yet</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TRADING ==================== -->
+    <section class="panel" id="panel-trading">
+
+      <div class="card">
+        <h2>Instrument</h2>
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="flex:2">
+            <label for="instrument-select">Trading</label>
+            <select id="instrument-select"></select>
+          </div>
+          <div class="field">
+            <label for="new-symbol">New symbol</label>
+            <input type="text" id="new-symbol" placeholder="AAPL" maxlength="16" />
+          </div>
+          <div class="field">
+            <label for="new-quote-ccy">Quote ccy</label>
+            <input type="text" id="new-quote-ccy" value="INR" maxlength="3" style="width:80px" />
+          </div>
+          <button class="btn secondary" id="btn-create-instrument" type="button">Create instrument</button>
+        </div>
+      </div>
+
+      <div class="stat-row" id="instrument-stats"></div>
+
+      <div class="grid">
+        <div class="card">
+          <h2>Place order</h2>
+          <form id="form-order">
+            <div class="field">
+              <label>Side</label>
+              <div class="segmented" id="side-toggle">
+                <button type="button" class="active buy" data-value="buy">Buy</button>
+                <button type="button" class="sell" data-value="sell">Sell</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Type</label>
+              <div class="segmented" id="type-toggle">
+                <button type="button" class="active limit" data-value="limit">Limit</button>
+                <button type="button" class="market" data-value="market">Market</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="order-account">Cash account</label>
+              <select id="order-account" required></select>
+            </div>
+            <div class="row">
+              <div class="field" id="price-field">
+                <label for="order-price">Limit price (minor units)</label>
+                <input type="number" id="order-price" min="1" placeholder="500" />
+              </div>
+              <div class="field">
+                <label for="order-qty">Quantity</label>
+                <input type="number" id="order-qty" min="1" placeholder="10" required />
+              </div>
+            </div>
+            <button class="btn" type="submit">Place order</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Order book</h2>
+          <div class="book">
+            <div class="book-side bids">
+              <h3>Bids</h3>
+              <div id="book-bids"></div>
+            </div>
+            <div class="book-side asks">
+              <h3>Asks</h3>
+              <div id="book-asks"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Orders <span class="count" id="orders-count">0</span>
+          <span class="section-actions"><button class="btn secondary small" data-refresh="trading">Refresh</button></span>
+        </h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Seq</th><th>Side</th><th>Type</th><th class="num">Price</th>
+              <th class="num">Qty</th><th class="num">Filled</th><th>Status</th><th>ID</th>
+            </tr></thead>
+            <tbody id="orders-body"><tr class="empty-row"><td colspan="8">No orders yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Trades <span class="count" id="trades-count">0</span></h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th class="num">Price</th><th class="num">Qty</th><th>Buy order</th><th>Sell order</th>
+            </tr></thead>
+            <tbody id="trades-body"><tr class="empty-row"><td colspan="4">No trades yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    payments-platform local console &mdash; talks directly to the API in your browser, nothing sent anywhere else.
+    See <a href="http://localhost:8000/docs" target="_blank" rel="noopener">/docs</a> for the raw API.
+  </footer>
+
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

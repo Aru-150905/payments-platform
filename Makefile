@@ -1,5 +1,5 @@
 .PHONY: up ui observability down topics migrate seed api worker relay logs demo \
-	rebuild-read-model reconcile retention-purge load-test
+	rebuild-read-model reconcile retention-purge load-test web
 
 up:
 	docker compose up -d
@@ -72,3 +72,13 @@ retention-purge:
 # header comment for what it exercises and why.
 load-test:
 	k6 run k6/m5_load_test.js
+
+# The local console (frontend/) — no build step, so "serving" it is just
+# handing the three static files to a browser. A plain `python -m
+# http.server` rather than opening index.html via file:// because some
+# browsers restrict fetch() from a file:// origin more aggressively than
+# CORS alone would; a real (if trivial) HTTP origin sidesteps that
+# entirely. Needs `make api` already running.
+web:
+	@echo "Serving frontend/ at http://localhost:5500 (Ctrl+C to stop)"
+	python3 -m http.server 5500 --directory frontend
