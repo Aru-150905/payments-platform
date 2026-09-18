@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,10 +26,20 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 # --------------------------------------------------------------------------
 
 class AccountIn(BaseModel):
-    owner_id: str
-    name: str
+    # max_length matches accounts.owner_id/name's actual VARCHAR sizes
+    # (app/db/models.py) — without this, a too-long value reaches the
+    # database as a raw length-violation error the global handler in
+    # main.py can only report as "internal server error", instead of a
+    # 422 naming the actual field and limit.
+    owner_id: str = Field(max_length=64)
+    name: str = Field(max_length=128)
     account_type: AccountType = AccountType.LIABILITY
-    currency: str = "INR"
+    # Same pattern as accounts.currency's own CHECK constraint
+    # (ck_accounts_currency_iso) — an ISO code or an instrument symbol,
+    # see ADR 0008 Decision 4. Validating it here means a malformed value
+    # 422s with a specific message instead of reaching that constraint at
+    # all.
+    currency: str = Field(default="INR", pattern=r"^[A-Z0-9]{1,16}$")
     allow_negative: bool = False
 
 
@@ -46,7 +56,20 @@ class PaymentIn(BaseModel):
     payee_account_id: uuid.UUID
     # Minor units, so the API can never be handed 19.99 and round it.
     amount_minor: int = Field(gt=0)
-    currency: str = "INR"
+    # payments.currency has no DB-level CHECK (just a VARCHAR(3) length),
+    # unlike accounts/instruments — the pattern here is this project's own
+    # ISO-code convention made explicit, not a constraint being mirrored.
+    currency: str = Field(default="INR", pattern=r"^[A-Z]{3}$")
+
+    @model_validator(mode="after")
+    def _payer_and_payee_differ(self) -> PaymentIn:
+        # Mirrors ck_payment_distinct_accounts (migration 0001) at the API
+        # boundary — without this, submitting the same account twice
+        # reaches that CHECK constraint as a raw IntegrityError instead of
+        # a 422 that says what's actually wrong.
+        if self.payer_account_id == self.payee_account_id:
+            raise ValueError("payer_account_id and payee_account_id must differ")
+        return self
 
 
 class PaymentOut(BaseModel):
@@ -69,20 +92,35 @@ class PaymentOut(BaseModel):
 
 @router.post("/accounts", response_model=AccountOut, status_code=201)
 async def create_account(body: AccountIn, session: AsyncSession = Depends(get_session)):
-    async with session.begin():
-        account = Account(**body.model_dump())
-        session.add(account)
-        await session.flush()
-        # Every account gets its balance row up front, so ledger.post() can
-        # assume it exists and lock it. Creating it lazily would mean two
-        # concurrent first-postings racing to insert the same row.
-        session.add(
-            Balance(
-                account_id=account.id,
-                currency=account.currency,
-                balance_minor=0,
+    try:
+        async with session.begin():
+            account = Account(**body.model_dump())
+            session.add(account)
+            await session.flush()
+            # Every account gets its balance row up front, so ledger.post() can
+            # assume it exists and lock it. Creating it lazily would mean two
+            # concurrent first-postings racing to insert the same row.
+            session.add(
+                Balance(
+                    account_id=account.id,
+                    currency=account.currency,
+                    balance_minor=0,
+                )
             )
-        )
+    except IntegrityError as exc:
+        # uq_accounts_owner_name_currency (migration 0003, added for
+        # app/services/trading.py's position-account race) fires here too —
+        # this endpoint has no other uniqueness check, so a plain duplicate
+        # (owner_id, name, currency) previously reached the database as the
+        # first thing to catch it. Before that constraint existed nothing
+        # ever collided here, so this path was never exercised. A 409 with
+        # the actual conflicting fields, not a raw 500 — the caller sent a
+        # well-formed request; the world already has this account.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"an account already exists for owner '{body.owner_id}' named "
+            f"'{body.name}' in {body.currency}",
+        ) from exc
 
     return AccountOut(
         id=account.id, owner_id=account.owner_id, name=account.name,
@@ -132,7 +170,9 @@ async def create_payment(
     session: AsyncSession = Depends(get_session),
     # Required, not optional. Making idempotency opt-in means every client that
     # forgets the header can double-charge someone on a flaky connection.
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    # max_length matches ledger_transactions/payments.idempotency_key's
+    # actual VARCHAR(128) — same reasoning as AccountIn's field limits above.
+    idempotency_key: str = Header(..., alias="Idempotency-Key", max_length=128),
 ):
     try:
         async with session.begin():

@@ -25,8 +25,12 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 # --------------------------------------------------------------------------
 
 class InstrumentIn(BaseModel):
-    symbol: str
-    quote_currency: str = "INR"
+    # Both patterns mirror instruments' own CHECK constraints exactly
+    # (ck_instruments_symbol_format, ck_instruments_quote_currency_iso —
+    # migration 0003) — validating here means a malformed value 422s with a
+    # specific message instead of reaching those constraints raw.
+    symbol: str = Field(pattern=r"^[A-Z0-9]{1,16}$")
+    quote_currency: str = Field(default="INR", pattern=r"^[A-Z]{3}$")
 
 
 class InstrumentOut(BaseModel):
@@ -107,11 +111,18 @@ class TradeOut(BaseModel):
 
 @router.post("/instruments", response_model=InstrumentOut, status_code=201)
 async def create_instrument(body: InstrumentIn, session: AsyncSession = Depends(get_session)):
-    async with session.begin():
-        instrument = Instrument(**body.model_dump())
-        session.add(instrument)
-        await session.flush()
-        return InstrumentOut.of(instrument)
+    try:
+        async with session.begin():
+            instrument = Instrument(**body.model_dump())
+            session.add(instrument)
+            await session.flush()
+            return InstrumentOut.of(instrument)
+    except IntegrityError as exc:
+        # instruments.symbol is unique. A 409 naming the actual conflict,
+        # not a raw 500 — same reasoning as create_account's identical fix.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"instrument '{body.symbol}' already exists"
+        ) from exc
 
 
 @router.get("/instruments", response_model=list[InstrumentOut])
@@ -133,7 +144,7 @@ async def create_order(
     # Required, not optional — same reasoning as app/api/routes.py's
     # Idempotency-Key: an order retried after a network timeout without one
     # could get placed twice.
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", max_length=128),
 ):
     try:
         async with session.begin():

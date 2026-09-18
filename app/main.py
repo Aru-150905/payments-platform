@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.api.rate_limit import RateLimitMiddleware, new_limiter
 from app.api.routes import router
@@ -61,6 +61,36 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(trading_router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    The safety net CORS needs: Starlette's default behavior for an
+    exception that reaches nobody's `except` clause is to let its own
+    ServerErrorMiddleware — added automatically, OUTSIDE every middleware
+    this file registers, CORSMiddleware included — build the 500 response.
+    CORSMiddleware never sees that response to attach its headers to it, so
+    a browser gets a same-origin-policy-shaped failure instead of a 500 it
+    could read: fetch() reports the generic, undiagnosable "Failed to
+    fetch" instead of surfacing any status code or body at all.
+    Registering a handler for the base Exception runs it INSIDE the
+    routing layer instead — which every middleware here, CORS included,
+    already wraps — so the response this returns gets real CORS headers
+    like any normal response would.
+
+    Every specific exception this project already maps to a real status
+    code (ledger.InsufficientFunds -> 422, IllegalTransition -> 409, ...)
+    is still caught first, closer to where it happens, with a message that
+    actually explains what went wrong — this only catches what's left: a
+    genuine bug, not an expected rejection. The client still only sees
+    "internal server error", never a stack trace; the real one is logged
+    here for whoever reads this process's logs next.
+    """
+    logging.getLogger(__name__).exception(
+        "unhandled exception on %s %s", request.method, request.url.path
+    )
+    return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
 @app.get("/metrics")
