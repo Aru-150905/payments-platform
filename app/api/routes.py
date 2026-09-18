@@ -90,6 +90,29 @@ async def create_account(body: AccountIn, session: AsyncSession = Depends(get_se
     )
 
 
+@router.get("/accounts", response_model=list[AccountOut])
+async def list_accounts(
+    owner_id: str | None = None, session: AsyncSession = Depends(get_session)
+):
+    """
+    Read-only, for the frontend's account picker/table — nothing else in
+    this codebase needed "every account," only "one account by id," which
+    is why this didn't exist before. A single join against Balance instead
+    of N+1 calls to ledger.get_balance() per row.
+    """
+    query = select(Account, Balance).join(Balance, Balance.account_id == Account.id)
+    if owner_id is not None:
+        query = query.where(Account.owner_id == owner_id)
+    rows = (await session.execute(query.order_by(Account.created_at.desc()).limit(500))).all()
+    return [
+        AccountOut(
+            id=a.id, owner_id=a.owner_id, name=a.name,
+            currency=a.currency, balance_minor=b.balance_minor,
+        )
+        for a, b in rows
+    ]
+
+
 @router.get("/accounts/{account_id}/balance")
 async def get_balance(account_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     try:
@@ -152,6 +175,14 @@ async def capture_payment(payment_id: uuid.UUID, session: AsyncSession = Depends
 @router.post("/payments/{payment_id}/void", response_model=PaymentOut)
 async def void_payment(payment_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     return await _mutate(session, payments.void, payment_id)
+
+
+@router.get("/payments", response_model=list[PaymentOut])
+async def list_payments(session: AsyncSession = Depends(get_session)):
+    rows = (
+        await session.execute(select(Payment).order_by(Payment.created_at.desc()).limit(500))
+    ).scalars().all()
+    return [PaymentOut.of(p) for p in rows]
 
 
 @router.get("/payments/{payment_id}", response_model=PaymentOut)

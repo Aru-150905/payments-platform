@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 from starlette.responses import Response
@@ -44,6 +45,20 @@ app.add_middleware(RateLimitMiddleware)
 # literally everything this process responds with — see MetricsMiddleware's
 # docstring for why that ordering is deliberate, not incidental.
 app.add_middleware(MetricsMiddleware)
+# CORS, outermost of all (added last): a browser's preflight OPTIONS request
+# carries no X-API-Key and would otherwise be rejected by auth before ever
+# reaching this middleware. allow_origins="*" is a deliberate local-dev-tool
+# choice, not a production posture — frontend/ is a plain static page meant
+# to be opened straight from disk or a throwaway `python -m http.server`,
+# with no fixed origin to allow-list. There's no session cookie or browser
+# credential this could leak (auth is a header the page attaches itself),
+# which is what makes a wildcard origin acceptable here at all.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(router)
 app.include_router(trading_router)
 

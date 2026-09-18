@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_api_key
 from app.db.base import get_session
-from app.db.models import Instrument, Order, OrderSide, OrderType
+from app.db.models import Instrument, Order, OrderSide, OrderType, Trade
 from app.services import ledger, trading
 
 # Same shape as app/api/routes.py's router: auth applies to every route in
@@ -64,21 +64,40 @@ class OrderIn(BaseModel):
 class OrderOut(BaseModel):
     id: uuid.UUID
     instrument_id: uuid.UUID
+    cash_account_id: uuid.UUID
     side: str
     order_type: str
     limit_price_minor: int | None
     quantity: int
     filled_quantity: int
     status: str
+    sequence: int
 
     @classmethod
     def of(cls, o: Order) -> OrderOut:
         return cls(
-            id=o.id, instrument_id=o.instrument_id,
+            id=o.id, instrument_id=o.instrument_id, cash_account_id=o.cash_account_id,
             side=o.side.value, order_type=o.order_type.value,
             limit_price_minor=o.limit_price_minor,
             quantity=o.quantity, filled_quantity=o.filled_quantity,
-            status=o.status.value,
+            status=o.status.value, sequence=o.sequence,
+        )
+
+
+class TradeOut(BaseModel):
+    id: uuid.UUID
+    instrument_id: uuid.UUID
+    buy_order_id: uuid.UUID
+    sell_order_id: uuid.UUID
+    price_minor: int
+    quantity: int
+
+    @classmethod
+    def of(cls, t: Trade) -> TradeOut:
+        return cls(
+            id=t.id, instrument_id=t.instrument_id,
+            buy_order_id=t.buy_order_id, sell_order_id=t.sell_order_id,
+            price_minor=t.price_minor, quantity=t.quantity,
         )
 
 
@@ -93,6 +112,14 @@ async def create_instrument(body: InstrumentIn, session: AsyncSession = Depends(
         session.add(instrument)
         await session.flush()
         return InstrumentOut.of(instrument)
+
+
+@router.get("/instruments", response_model=list[InstrumentOut])
+async def list_instruments(session: AsyncSession = Depends(get_session)):
+    rows = (
+        await session.execute(select(Instrument).order_by(Instrument.created_at.desc()))
+    ).scalars().all()
+    return [InstrumentOut.of(i) for i in rows]
 
 
 # --------------------------------------------------------------------------
@@ -153,9 +180,39 @@ async def create_order(
     return OrderOut.of(order)
 
 
+@router.get("/orders", response_model=list[OrderOut])
+async def list_orders(
+    instrument_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Newest-first by `sequence` (the same total order the matcher's time
+    priority uses — see app/domain/matching.py), not `created_at`: it's a
+    real, gap-tolerant, strictly increasing column, not a timestamp two
+    orders could tie on.
+    """
+    query = select(Order).order_by(Order.sequence.desc()).limit(500)
+    if instrument_id is not None:
+        query = query.where(Order.instrument_id == instrument_id)
+    rows = (await session.execute(query)).scalars().all()
+    return [OrderOut.of(o) for o in rows]
+
+
 @router.get("/orders/{order_id}", response_model=OrderOut)
 async def get_order(order_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     order = await session.get(Order, order_id)
     if order is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "order not found")
     return OrderOut.of(order)
+
+
+@router.get("/trades", response_model=list[TradeOut])
+async def list_trades(
+    instrument_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    query = select(Trade).order_by(Trade.created_at.desc()).limit(500)
+    if instrument_id is not None:
+        query = query.where(Trade.instrument_id == instrument_id)
+    rows = (await session.execute(query)).scalars().all()
+    return [TradeOut.of(t) for t in rows]
